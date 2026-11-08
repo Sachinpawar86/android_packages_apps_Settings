@@ -8,8 +8,6 @@ package com.android.settings.deviceinfo.firmwareversion
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.content.pm.Signature
 import android.content.res.Resources
 import android.net.Uri
 import android.os.Handler
@@ -29,8 +27,6 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
-import java.util.Locale
 import java.util.concurrent.Executors
 
 class BuildMaintainerPreference :
@@ -61,14 +57,6 @@ class BuildMaintainerPreference :
         preference.onPreferenceClickListener = this
 
         val context = preference.context
-
-        if (!isOfficiallySigned(context)) {
-            resolvedMaintainer = ""
-            resolvedDonateUrl = null
-            applyUnofficialState(preference)
-            return
-        }
-
         val overlayMaintainer = safeGetString(context, R.string.build_maintainer_summary).trim()
         val overlayDonateUrl = safeGetString(context, R.string.build_maintainer_donate_url)
 
@@ -88,9 +76,6 @@ class BuildMaintainerPreference :
     }
 
     override fun getSummary(context: Context): CharSequence? {
-        if (!isOfficiallySigned(context)) {
-            return unofficialLabel(context)
-        }
         val maintainer = resolvedMaintainer
         if (maintainer.isNotEmpty()) return maintainer
         return safeGetString(context, R.string.build_maintainer_summary).trim()
@@ -98,7 +83,6 @@ class BuildMaintainerPreference :
     }
 
     override fun onPreferenceClick(preference: Preference): Boolean {
-        if (!isOfficiallySigned(preference.context)) return true
         val url = resolvedDonateUrl ?: return true
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
@@ -110,12 +94,6 @@ class BuildMaintainerPreference :
         return true
     }
 
-    private fun applyUnofficialState(preference: Preference) {
-        preference.isVisible = true
-        preference.summary = unofficialLabel(preference.context)
-        preference.isSelectable = false
-    }
-
     private fun applyOfficialState(preference: Preference) {
         val maintainer = resolvedMaintainer
         val hasMaintainer = maintainer.isNotEmpty()
@@ -125,52 +103,6 @@ class BuildMaintainerPreference :
         }
         preference.isSelectable = hasMaintainer && resolvedDonateUrl != null
     }
-
-    private fun unofficialLabel(context: Context): String =
-        safeGetString(context, R.string.build_maintainer_unofficial)
-            .trim()
-            .ifEmpty { "Unofficial" }
-
-    private fun isOfficiallySigned(context: Context): Boolean {
-        officialSigned?.let { return it }
-
-        val result = try {
-            val pi = context.packageManager.getPackageInfo(
-                PLATFORM_PACKAGE, PackageManager.GET_SIGNING_CERTIFICATES
-            )
-            val info = pi.signingInfo
-            if (info == null) {
-                false
-            } else {
-                val certs: Array<Signature> = if (info.hasMultipleSigners()) {
-                    info.apkContentsSigners
-                } else {
-                    info.signingCertificateHistory
-                } ?: emptyArray()
-
-                val allowed = officialCertDigests()
-                certs.any { sha256Hex(it.toByteArray()) in allowed }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Platform signature check failed", e)
-            false
-        }
-
-        Log.d(TAG, "Official platform signature: $result")
-        officialSigned = result
-        return result
-    }
-
-    private fun officialCertDigests(): Set<String> =
-        OFFICIAL_PLATFORM_CERT_SHA256
-            .map { it.replace(":", "").trim().lowercase(Locale.ROOT) }
-            .filter { it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' } }
-            .toSet()
-
-    private fun sha256Hex(bytes: ByteArray): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest(bytes)
-            .joinToString("") { "%02x".format(it) }
 
     private fun fetchMaintainerFromOta(
         preference: Preference,
@@ -301,16 +233,9 @@ class BuildMaintainerPreference :
 
     companion object {
         private const val TAG = "BuildMaintainerPreference"
-        private const val PLATFORM_PACKAGE = "android"
 
         private const val OTA_JSON_URL =
             "https://raw.githubusercontent.com/crdroidandroid/" +
                 "android_vendor_crDroidOTA/refs/heads/17.0/%s.json"
-
-        private val OFFICIAL_PLATFORM_CERT_SHA256: Set<String> = setOf(
-            "73fdfbf41fe6255a3fbc3cfda8b6666f4124f940f499bdd82f1566da68e45732",
-        )
-
-        @Volatile private var officialSigned: Boolean? = null
     }
 }
